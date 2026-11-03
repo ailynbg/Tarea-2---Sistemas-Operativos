@@ -10,15 +10,71 @@
 #include <pthread.h>
 #include <mutex>
 #include <atomic>
+#include <queue>
 
 
 using namespace std;
-string tablero[7][5];
-int perrosCap=0;
-atomic<bool> play(true); //consulta hilos
-mutex mutexProtect;
+struct Mesa {
+    string tablero[7][5];
+    int perrosCap = 0;
+    bool play = true;
+
+    pthread_mutex_t mutexProtect;
+    pthread_cond_t condicion;
+
+    Mesa() {
+        pthread_mutex_init(&mutexProtect, NULL);
+        pthread_cond_init(&condicion, NULL);
+    }
+
+    ~Mesa() {
+        pthread_mutex_destroy(&mutexProtect);
+        pthread_cond_destroy(&condicion);
+    }
+};
+struct Jugador {
+    int id;
+    int pareja;
+    bool asignado = false;
+    pthread_cond_t condicion;
+    Jugador(int numero) {
+        id = numero;
+        pareja = -1;
+        pthread_cond_init(&condicion, NULL);
+    }
+    ~Jugador() {
+        pthread_cond_destroy(&condicion);
+    }
+};
+queue<Jugador*> colaJugadores;
+sem_t mesasdispo;
+pthread_mutex_t mutexTorneo = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t jugadoresListos = PTHREAD_COND_INITIALIZER;
+int jugadoresEsperando = 0;
+
 int randomtime() {
     return 50+rand()%251;
+}
+bool emparejar(Jugador &jugador) {
+    pthread_mutex_lock(&mutexTorneo);
+    if (colaJugadores.empty()) {
+        colaJugadores.push(&jugador);
+        while (!jugador.asignado) {
+            pthread_cond_wait(&jugador.condicion, &mutexTorneo);
+        }
+        pthread_mutex_unlock(&mutexTorneo);
+        return false;
+    } else {
+        Jugador* pareja = colaJugadores.front();
+        colaJugadores.pop();
+        jugador.pareja = pareja->id;
+        pareja->pareja = jugador.id;
+        jugador.asignado = true;
+        pareja->asignado = true;
+        pthread_cond_signal(&pareja->condicion);
+        pthread_mutex_unlock(&mutexTorneo);
+        return true;
+    }
 }
 void Config(string arch) { // saca las lineas de texto
     ifstream config(arch);
@@ -83,80 +139,83 @@ bool Adyacente(int filaOrigen, int columnaOrigen, int filaDestino, int columnaDe
     }
     return false;
 }
-bool PerrosWin() {
-
-    lock_guard<mutex> bloqueo(mutexProtect);
+bool PerrosWin(Mesa &mesa) {
+    pthread_mutex_lock(&mesa.mutexProtect);
     int filaPuma = -1;
     int columnaPuma = -1;
     for (int fila = 0; fila < 7; fila++) {
         for (int columna = 0; columna < 5; columna++) {
-            if (tablero[fila][columna] == "P") {
+            if (mesa.tablero[fila][columna] == "P") {
                 filaPuma = fila;
                 columnaPuma = columna;
             }
-          }
+        }
     }
     for (int fila = 0; fila < 7; fila++) {
         for (int columna = 0; columna < 5; columna++) {
-            if (tablero[fila][columna] == "." && Adyacente(filaPuma, columnaPuma, fila, columna)) {
+            if (mesa.tablero[fila][columna] == "." &&
+                Adyacente(filaPuma, columnaPuma, fila, columna)) {
+                pthread_mutex_unlock(&mesa.mutexProtect);
                 return false;
-          }
-      }
+            }
+        }
     }
-
+    pthread_mutex_unlock(&mesa.mutexProtect);
     return true;
 }
-void Movimiento(string tablero[7][5], int filaOrigen,int columnaOrigen, int filaDestino,int columnaDestino) {
-    {lock_guard<mutex> bloqueo(mutexProtect);
-    if (tablero[filaOrigen][columnaOrigen] == ".") {
-        cout << "SIN PIEZA ACA" << endl;
+void Movimiento(Mesa &mesa, int filaOrigen, int columnaOrigen, int filaDestino, int columnaDestino) {
+    pthread_mutex_lock(&mesa.mutexProtect);
+    if (mesa.tablero[filaOrigen][columnaOrigen] == ".") {
+        pthread_mutex_unlock(&mesa.mutexProtect);
         return;
     }
     if (!Adyacente(filaOrigen, columnaOrigen, filaDestino, columnaDestino)) {
-    cout << "MOVIMIENTO NO VALIDO" << endl;
-    return;
-    }
-    if (tablero[filaDestino][columnaDestino] != ".") {
-        cout << "OCUPADO" << endl;
+        pthread_mutex_unlock(&mesa.mutexProtect);
         return;
     }
-    tablero[filaDestino][columnaDestino] =tablero[filaOrigen][columnaOrigen];
-    tablero[filaOrigen][columnaOrigen] = ".";}
-    if(PerrosWin()){
-    play=false;
-    cout<<" GANAN LOS PERROS"<<endl;
+    if (mesa.tablero[filaDestino][columnaDestino] != ".") {
+        pthread_mutex_unlock(&mesa.mutexProtect);
+        return;
+    }
+    mesa.tablero[filaDestino][columnaDestino] =
+        mesa.tablero[filaOrigen][columnaOrigen];
+    mesa.tablero[filaOrigen][columnaOrigen] = ".";
+    pthread_mutex_unlock(&mesa.mutexProtect);
+    if(mesa.play && PerrosWin(mesa)){
+      mesa.play =false;
+      cout<<"GANAN LOS PERROS"<<endl;
     }
 }
 
 
-void Tablero() {
+void Tablero(Mesa &mesa) {
     for (int fila = 0; fila < 7; fila++) {
         for (int columna = 0; columna < 5; columna++) {
-            tablero[fila][columna] = '.';
+            mesa.tablero[fila][columna] = '.';
         }
     }
-    tablero[0][0] = ' ';
-    tablero[0][1] = ' ';
-    tablero[0][3] = ' ';
-    tablero[0][4] = ' ';
-    tablero[1][0] = ' ';
-    tablero[1][4] = ' ';
-    tablero[4][2] = "P";
-    tablero[2][0] = "E";
-    tablero[2][2] = "E";
-    tablero[2][4] = "E";
-    tablero[3][1] = "E";
-    tablero[3][3] = "E";
-    tablero[4][0] = "E";
-    tablero[4][4] = "E";
-    tablero[5][1] = "E";
-    tablero[5][3] = "E";
-    tablero[6][0] = "E";
-    tablero[6][2] = "E";
-    tablero[6][4] = "E";
+    mesa.tablero[0][0] = ' ';
+    mesa.tablero[0][1] = ' ';
+    mesa.tablero[0][3] = ' ';
+    mesa.tablero[0][4] = ' ';
+    mesa.tablero[1][0] = ' ';
+    mesa.tablero[1][4] = ' ';
+    mesa.tablero[4][2] = "P";
+    mesa.tablero[2][0] = "E";
+    mesa.tablero[2][2] = "E";
+    mesa.tablero[2][4] = "E";
+    mesa.tablero[3][1] = "E";
+    mesa.tablero[3][3] = "E";
+    mesa.tablero[4][0] = "E";
+    mesa.tablero[4][4] = "E";
+    mesa.tablero[5][1] = "E";
+    mesa.tablero[5][3] = "E";
+    mesa.tablero[6][0] = "E";
+    mesa.tablero[6][2] = "E";
+    mesa.tablero[6][4] = "E";
     for (int fila = 0; fila < 7; fila++) {
         for (int columna = 0; columna < 5; columna++) {
-            cout << tablero[fila][columna] << "   ";
+            cout << mesa.tablero[fila][columna] << "   ";
         }
         cout << endl;
     }
@@ -168,196 +227,209 @@ bool Pumawin(int perrosCap){
   return false;
 }
 
-void capturarPerro(string tablero[7][5], int filaOrigen, int columnaOrigen, int filaPerro, int columnaPerro, int filaDestino, int columnaDestino) {
-    lock_guard<mutex> bloqueo(mutexProtect);
-    if (tablero[filaDestino][columnaDestino] != ".") {
-        cout << "OCUPADO" << endl;
+void capturarPerro(Mesa &mesa, int filaOrigen, int columnaOrigen,
+                   int filaPerro, int columnaPerro,
+                   int filaDestino, int columnaDestino) {
+    pthread_mutex_lock(&mesa.mutexProtect);
+    if (mesa.tablero[filaDestino][columnaDestino] != ".") {
+        pthread_mutex_unlock(&mesa.mutexProtect);
         return;
     }
-    if (tablero[filaOrigen][columnaOrigen] != "P") {
-        cout << "NO ES PUMA" << endl;
+    if (mesa.tablero[filaOrigen][columnaOrigen] != "P") {
+        pthread_mutex_unlock(&mesa.mutexProtect);
         return;
     }
-
-    if (tablero[filaPerro][columnaPerro] != "E") {
-        cout << "Sin perro" << endl;
+    if (mesa.tablero[filaPerro][columnaPerro] != "E") {
+        pthread_mutex_unlock(&mesa.mutexProtect);
         return;
     }
-    if (!Adyacente(filaOrigen, columnaOrigen, filaPerro, columnaPerro) || !Adyacente(filaPerro, columnaPerro, filaDestino, columnaDestino)) {
+    if (!Adyacente(filaOrigen, columnaOrigen, filaPerro, columnaPerro) ||
+        !Adyacente(filaPerro, columnaPerro, filaDestino, columnaDestino)) {
+        pthread_mutex_unlock(&mesa.mutexProtect);
         return;
     }
-    
-    tablero[filaDestino][columnaDestino] = "P";
-    tablero[filaOrigen][columnaOrigen] = ".";
-    tablero[filaPerro][columnaPerro] = ".";
-    perrosCap++;
-    if(Pumawin(perrosCap)){
-    play=false;
-    cout<<"A GANADO EL PUMA"<<endl;
-    
+    mesa.tablero[filaDestino][columnaDestino] = "P";
+    mesa.tablero[filaOrigen][columnaOrigen] = ".";
+    mesa.tablero[filaPerro][columnaPerro] = ".";
+    mesa.perrosCap++;
+    if (mesa.play && Pumawin(mesa.perrosCap)) {
+        mesa.play = false;
+        cout << "GANA EL PUMA" << endl;
     }
-  
+    pthread_mutex_unlock(&mesa.mutexProtect);
 }
 
-void pumamov() {
-    while (play) {
+void pumamov(Mesa &mesa) {
+    while (mesa.play) {
         this_thread::sleep_for(chrono::milliseconds(randomtime()));
-
         int filapuma = -1;
         int columnapuma = -1;
-        {
-            lock_guard<mutex> bloqueo(mutexProtect);
-            for (int fila = 0; fila < 7; fila++) {
-                for (int columna = 0; columna < 5; columna++) {
-                    if (tablero[fila][columna] == "P") {
-                        filapuma = fila;
-                        columnapuma = columna;
-                  }
-             }
+        pthread_mutex_lock(&mesa.mutexProtect);
+        for (int fila = 0; fila < 7; fila++) {
+            for (int columna = 0; columna < 5; columna++) {
+                if (mesa.tablero[fila][columna] == "P") {
+                    filapuma = fila;
+                    columnapuma = columna;
+                }
             }
         }
-
+        pthread_mutex_unlock(&mesa.mutexProtect);
+        if (!mesa.play) break;
+        if (filapuma == -1) break;
         int filaPerro = -1;
         int columnaPerro = -1;
         int filaDestino = -1;
         int columnaDestino = -1;
         bool hayCaptura = false;
-        {
-            lock_guard<mutex> bloqueo(mutexProtect);
-            for (int f = 0; f < 7 && !hayCaptura; f++) { //para captura
-                for (int c = 0; c < 5 && !hayCaptura; c++) {
-                    if (tablero[f][c] == "E" &&
-                        Adyacente(filapuma, columnapuma, f, c)) {
-                        for (int x = 0; x < 7 && !hayCaptura; x++) {
-                            for (int y = 0; y < 5; y++) {
-                                if (tablero[x][y] == "." &&
-                                    Adyacente(f, c, x, y)) {
-                                    filaPerro = f;
-                                    columnaPerro = c;
-                                    filaDestino = x;
-                                    columnaDestino = y;
-                                    hayCaptura = true;
-                                    break;
-                              }
-                          }
-                      }
+        pthread_mutex_lock(&mesa.mutexProtect);
+        for (int f = 0; f < 7 && !hayCaptura; f++) {
+            for (int c = 0; c < 5 && !hayCaptura; c++) {
+                if (mesa.tablero[f][c] == "E" &&
+                    Adyacente(filapuma, columnapuma, f, c)) {
+                    for (int x = 0; x < 7 && !hayCaptura; x++) {
+                        for (int y = 0; y < 5; y++) {
+                            if (mesa.tablero[x][y] == "." &&
+                                Adyacente(f, c, x, y)) {
+                                filaPerro = f;
+                                columnaPerro = c;
+                                filaDestino = x;
+                                columnaDestino = y;
+                                hayCaptura = true;
+                                break;
+                            }
+                        }
+                    }
                 }
-               }
             }
         }
+        pthread_mutex_unlock(&mesa.mutexProtect);
         if (hayCaptura) {
-            capturarPerro(tablero, filapuma, columnapuma,filaPerro, columnaPerro,filaDestino, columnaDestino);
+            capturarPerro(mesa, filapuma, columnapuma,
+                          filaPerro, columnaPerro,
+                          filaDestino, columnaDestino);
             continue;
         }
-        int filaDestinoNormal = -1;
-        int columnaDestinoNormal = -1;
+
         bool encontrar = false;
-        {
-            lock_guard<mutex> bloqueo(mutexProtect);
-            for (int fila = 0; fila < 7 && !encontrar; fila++) {
-                for (int columna = 0; columna < 5; columna++) {
-                    if (tablero[fila][columna] == "." &&
-                        Adyacente(filapuma, columnapuma, fila, columna)) {
-                        filaDestinoNormal = fila;
-                        columnaDestinoNormal = columna;
-                        encontrar = true;
-                        break;
-                  }
+        pthread_mutex_lock(&mesa.mutexProtect);
+        for (int fila = 0; fila < 7 && !encontrar; fila++) {
+            for (int columna = 0; columna < 5; columna++) {
+                if (mesa.tablero[fila][columna] == "." &&
+                    Adyacente(filapuma, columnapuma, fila, columna)) {
+
+                    filaDestino = fila;
+                    columnaDestino = columna;
+                    encontrar = true;
+                    break;
                 }
             }
         }
+        pthread_mutex_unlock(&mesa.mutexProtect);
         if (encontrar) {
-        Movimiento(tablero, filapuma, columnapuma, filaDestinoNormal, columnaDestinoNormal);
+            Movimiento(mesa, filapuma, columnapuma,
+                       filaDestino, columnaDestino);
         }
     }
 }
 
-void perromov(int num) {
-    while (play) {
+void perromov(Mesa &mesa, int num) {
+    while (mesa.play) {
         this_thread::sleep_for(chrono::milliseconds(randomtime()));
         int contador = 0;
         int filaPerro = -1;
         int columnaPerro = -1;
         bool encontrado = false;
-        {
-          lock_guard<mutex> bloqueo(mutexProtect);
-            for (int fila = 0; fila < 7 && !encontrado; fila++) {
-                for (int columna = 0; columna < 5; columna++) {
-                    if (tablero[fila][columna] == "E") {
-                        contador++;
-                        if (contador == num) {
-                            filaPerro = fila;
-                            columnaPerro = columna;
-                            encontrado = true;
-                            break;
-                       }
-                    }
-                }
-            }
-        }
-        if (!encontrado) {
-            continue;
-        }
-        int filaDestino = -1;
-        int columnaDestino = -1;
-        bool hayMovimiento = false;
-        {
-            lock_guard<mutex> bloqueo(mutexProtect);
-            if (tablero[filaPerro][columnaPerro] != "E") {
-                continue;
-            }
-            for (int fila = 0; fila < 7 && !hayMovimiento; fila++) {
-                for (int columna = 0; columna < 5; columna++) {
-                    if (tablero[fila][columna] == "." &&
-                        Adyacente(filaPerro, columnaPerro, fila, columna)) {
-                        filaDestino = fila;
-                        columnaDestino = columna;
-                        hayMovimiento = true;
+        pthread_mutex_lock(&mesa.mutexProtect);
+        for (int fila = 0; fila < 7 && !encontrado; fila++) {
+            for (int columna = 0; columna < 5; columna++) {
+                if (mesa.tablero[fila][columna] == "E") {
+                    contador++;
+
+                    if (contador == num) {
+                        filaPerro = fila;
+                        columnaPerro = columna;
+                        encontrado = true;
                         break;
                     }
                 }
             }
         }
+        pthread_mutex_unlock(&mesa.mutexProtect);
+        if (!encontrado) continue;
+        int filaDestino = -1;
+        int columnaDestino = -1;
+        bool hayMovimiento = false;
+        pthread_mutex_lock(&mesa.mutexProtect);
+        for (int fila = 0; fila < 7 && !hayMovimiento; fila++) {
+            for (int columna = 0; columna < 5; columna++) {
+                if (mesa.tablero[filaPerro][columnaPerro] == "E" &&
+                    mesa.tablero[fila][columna] == "." &&
+                    Adyacente(filaPerro, columnaPerro, fila, columna)) {
+                    filaDestino = fila;
+                    columnaDestino = columna;
+                    hayMovimiento = true;
+                    break;
+                }
+            }
+        }
+        pthread_mutex_unlock(&mesa.mutexProtect);
         if (hayMovimiento) {
-        Movimiento(tablero, filaPerro, columnaPerro, filaDestino, columnaDestino);
+            Movimiento(mesa, filaPerro, columnaPerro,
+                       filaDestino, columnaDestino);
         }
     }
 }
-
-
+void jugarPartida() {
+    sem_wait(&mesasdispo);
+    Mesa mesa;
+    Tablero(mesa);
+    thread hilos[13];
+    hilos[0] = thread(pumamov, ref(mesa));
+    for (int i = 1; i < 13; i++) {
+        hilos[i] = thread(perromov, ref(mesa), i);
+    }
+    for (int i = 0; i < 13; i++) {
+        hilos[i].join();
+    }
+    sem_post(&mesasdispo);
+}
+void cliente(Jugador* jugador) {
+    bool inicia = emparejar(*jugador);
+    if (inicia) {
+        jugarPartida();
+    }
+}
 
 int main(int argc, char* argv[]) {
     srand(time(NULL));
     if (argc < 3 || argc > 4) {
-        return 1;}
+        return 1;
+    }
+    int N = stoi(argv[1]);
+    int M = stoi(argv[2]);
     if (argc == 4) {
-        cout << "archivo de configuracion: "<<argv[3] << endl;
         Config(argv[3]);
     }
-    int N, M;
-    N = stoi(argv[1]);
-    M = stoi(argv[2]);
-    
-    Tablero();
-    
-    //threads [0] puma, el resto perros
-    thread hilos[13];
-    hilos[0]=thread(pumamov);
-   
-
-    for(int i=1; i<13; i++){
-      hilos[i]=thread(perromov, i);
+    sem_init(&mesasdispo, 0, M);
+    Jugador** jugadores = new Jugador*[N];
+    thread *hilos = new thread[N];
+    for (int i = 0; i < N; i++) {
+        jugadores[i] = new Jugador(i + 1);
     }
-    for(int i=0; i<13; i++){
-      hilos[i].join();
+    for (int i = 0; i < N; i++) {
+        hilos[i] = thread(cliente, jugadores[i]);
     }
-
-    cout<< "Torneo Komikan"<< endl;
-    cout <<"numero total de clientes: "<<N<< endl;
-    cout << "Max. de mesas: "<< M << endl;
-
-   
-  
-
+    for (int i = 0; i < N; i++) {
+        hilos[i].join();
+    }
+    for (int i = 0; i < N; i++) {
+        delete jugadores[i];
+    }
+    delete[] jugadores;
+    delete[] hilos;
+    sem_destroy(&mesasdispo);
+    pthread_mutex_destroy(&mutexTorneo);
+    pthread_cond_destroy(&jugadoresListos);
+    cout << "Torneo Komikan finalizado" << endl;
     return 0;
 }
