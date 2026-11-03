@@ -2,10 +2,24 @@
 #include <string>
 #include <fstream>
 #include <sstream>
+#include <cstdlib>
+#include <ctime>
+#include <chrono>
+#include <thread>
+#include <semaphore.h>
+#include <pthread.h>
+#include <mutex>
+#include <atomic>
+
 
 using namespace std;
+string tablero[7][5];
 int perrosCap=0;
-
+atomic<bool> play(true); //consulta hilos
+mutex mutexProtect;
+int randomtime() {
+    return 50+rand()%251;
+}
 void Config(string arch) { // saca las lineas de texto
     ifstream config(arch);
     string linea;
@@ -59,7 +73,6 @@ void Config(string arch) { // saca las lineas de texto
 }
 
 void Tablero() {
-    string tablero[7][5];
     for (int fila = 0; fila < 7; fila++) {
         for (int columna = 0; columna < 5; columna++) {
             tablero[fila][columna] = '.';
@@ -91,7 +104,35 @@ void Tablero() {
         cout << endl;
     }
 }
+void pumamov(){
+    this_thread::sleep_for(chrono::milliseconds(randomtime())); // espera
+    lock_guard<mutex> bloqueo(mutexProtect);
+    for (int fila = 0; fila < 7; fila++) {
+        for (int columna = 0; columna < 5; columna++) {
+            if (tablero[fila][columna] == "P") {
+              cout << "Puma ubicado en: ["<< fila << "," << columna <<"]"<< endl;
+            }
+        }
+    }
+}
+void perromov(int num){
+    this_thread::sleep_for(chrono::milliseconds(randomtime()));
+    lock_guard<mutex> bloqueo(mutexProtect);
+    int contador = 0;
+    for (int fila = 0; fila < 7; fila++) {
+        for (int columna = 0; columna < 5; columna++) {
+            if (tablero[fila][columna] == "E") {
+                contador++;
+                if (contador == num) {
+                    cout << "Perro " << num<< " ubicado en: ["<< fila << ", " << columna <<"]"<< endl;
+                    return;
+                }
+            }
+        }
+    }
+}
 void Movimiento(string tablero[7][5], int filaOrigen,int columnaOrigen, int filaDestino,int columnaDestino) {
+    lock_guard<mutex> bloqueo(mutexProtect);
     if (tablero[filaOrigen][columnaOrigen] == ".") {
         cout << "SIN PIEZA ACA" << endl;
         return;
@@ -103,6 +144,7 @@ void Movimiento(string tablero[7][5], int filaOrigen,int columnaOrigen, int fila
     tablero[filaDestino][columnaDestino] =tablero[filaOrigen][columnaOrigen];
     tablero[filaOrigen][columnaOrigen] = ".";
 }
+
 bool Adyacente(int filaOrigen, int columnaOrigen, int filaDestino, int columnaDestino) { //verificar si se puede mover
     int difFila = abs(filaDestino - filaOrigen);
     int difColumna = abs(columnaDestino - columnaOrigen);
@@ -136,7 +178,6 @@ void capturarPerro(string tablero[7][5], int filaOrigen, int columnaOrigen, int 
 }
 bool Pumawin(int perrosCap){
     if(perrosCap>5){
-    
       return true;
     }
   return false;
@@ -145,12 +186,23 @@ bool Pumawin(int perrosCap){
 void Config(string arch);
 
 int main(int argc, char* argv[]) {
+    srand(time(NULL));
     if (argc < 3 || argc > 4) {
         return 1;}
 
     int N, M;
     N = stoi(argv[1]);
     M = stoi(argv[2]);
+    //threads [0] puma, el resto perros
+    thread hilos[13];
+    hilos[0]=thread(pumamov);
+
+    for(int i=1; i<13; i++){
+      hilos[i]=thread(perromov, i);
+    }
+    for(int i=0; i<13; i++){
+      hilos[i].join();
+    }
 
     cout<< "Torneo Komikan"<< endl;
     cout <<"numero total de clientes: "<<N<< endl;
