@@ -71,6 +71,63 @@ void Config(string arch) { // saca las lineas de texto
     }
     config.close();
 }
+bool Adyacente(int filaOrigen, int columnaOrigen, int filaDestino, int columnaDestino) { //verificar si se puede mover
+    int difFila = abs(filaDestino - filaOrigen);
+    int difColumna = abs(columnaDestino - columnaOrigen);
+
+    if(difFila==0&& difColumna==1){//horizontal
+    return true;
+    }
+    if(difFila==1&& difColumna==0){ //vertical
+    return true;
+    }
+    return false;
+}
+bool PerrosWin() {
+
+    lock_guard<mutex> bloqueo(mutexProtect);
+    int filaPuma = -1;
+    int columnaPuma = -1;
+    for (int fila = 0; fila < 7; fila++) {
+        for (int columna = 0; columna < 5; columna++) {
+            if (tablero[fila][columna] == "P") {
+                filaPuma = fila;
+                columnaPuma = columna;
+            }
+          }
+    }
+    for (int fila = 0; fila < 7; fila++) {
+        for (int columna = 0; columna < 5; columna++) {
+            if (tablero[fila][columna] == "." && Adyacente(filaPuma, columnaPuma, fila, columna)) {
+                return false;
+          }
+      }
+    }
+
+    return true;
+}
+void Movimiento(string tablero[7][5], int filaOrigen,int columnaOrigen, int filaDestino,int columnaDestino) {
+    {lock_guard<mutex> bloqueo(mutexProtect);
+    if (tablero[filaOrigen][columnaOrigen] == ".") {
+        cout << "SIN PIEZA ACA" << endl;
+        return;
+    }
+    if (!Adyacente(filaOrigen, columnaOrigen, filaDestino, columnaDestino)) {
+    cout << "MOVIMIENTO NO VALIDO" << endl;
+    return;
+    }
+    if (tablero[filaDestino][columnaDestino] != ".") {
+        cout << "OCUPADO" << endl;
+        return;
+    }
+    tablero[filaDestino][columnaDestino] =tablero[filaOrigen][columnaOrigen];
+    tablero[filaOrigen][columnaOrigen] = ".";}
+    if(PerrosWin()){
+    play=false;
+    cout<<" GANAN LOS PERROS"<<endl;
+    }
+}
+
 
 void Tablero() {
     for (int fila = 0; fila < 7; fila++) {
@@ -104,60 +161,15 @@ void Tablero() {
         cout << endl;
     }
 }
-void pumamov(){
-    this_thread::sleep_for(chrono::milliseconds(randomtime())); // espera
-    lock_guard<mutex> bloqueo(mutexProtect);
-    for (int fila = 0; fila < 7; fila++) {
-        for (int columna = 0; columna < 5; columna++) {
-            if (tablero[fila][columna] == "P") {
-              cout << "Puma ubicado en: ["<< fila << "," << columna <<"]"<< endl;
-            }
-        }
+bool Pumawin(int perrosCap){
+    if(perrosCap>5){
+      return true;
     }
-}
-void perromov(int num){
-    this_thread::sleep_for(chrono::milliseconds(randomtime()));
-    lock_guard<mutex> bloqueo(mutexProtect);
-    int contador = 0;
-    for (int fila = 0; fila < 7; fila++) {
-        for (int columna = 0; columna < 5; columna++) {
-            if (tablero[fila][columna] == "E") {
-                contador++;
-                if (contador == num) {
-                    cout << "Perro " << num<< " ubicado en: ["<< fila << ", " << columna <<"]"<< endl;
-                    return;
-                }
-            }
-        }
-    }
-}
-void Movimiento(string tablero[7][5], int filaOrigen,int columnaOrigen, int filaDestino,int columnaDestino) {
-    lock_guard<mutex> bloqueo(mutexProtect);
-    if (tablero[filaOrigen][columnaOrigen] == ".") {
-        cout << "SIN PIEZA ACA" << endl;
-        return;
-    }
-    if (tablero[filaDestino][columnaDestino] != ".") {
-        cout << "OCUPADO" << endl;
-        return;
-    }
-    tablero[filaDestino][columnaDestino] =tablero[filaOrigen][columnaOrigen];
-    tablero[filaOrigen][columnaOrigen] = ".";
+  return false;
 }
 
-bool Adyacente(int filaOrigen, int columnaOrigen, int filaDestino, int columnaDestino) { //verificar si se puede mover
-    int difFila = abs(filaDestino - filaOrigen);
-    int difColumna = abs(columnaDestino - columnaOrigen);
-
-    if (difFila <= 1 && difColumna <= 1) {
-        if (difFila != 0 || difColumna != 0) {
-            return true;
-        }
-    }
-    return false;
-}
 void capturarPerro(string tablero[7][5], int filaOrigen, int columnaOrigen, int filaPerro, int columnaPerro, int filaDestino, int columnaDestino) {
-
+    lock_guard<mutex> bloqueo(mutexProtect);
     if (tablero[filaDestino][columnaDestino] != ".") {
         cout << "OCUPADO" << endl;
         return;
@@ -171,31 +183,167 @@ void capturarPerro(string tablero[7][5], int filaOrigen, int columnaOrigen, int 
         cout << "Sin perro" << endl;
         return;
     }
+    if (!Adyacente(filaOrigen, columnaOrigen, filaPerro, columnaPerro) || !Adyacente(filaPerro, columnaPerro, filaDestino, columnaDestino)) {
+        return;
+    }
+    
     tablero[filaDestino][columnaDestino] = "P";
     tablero[filaOrigen][columnaOrigen] = ".";
     tablero[filaPerro][columnaPerro] = ".";
     perrosCap++;
-}
-bool Pumawin(int perrosCap){
-    if(perrosCap>5){
-      return true;
+    if(Pumawin(perrosCap)){
+    play=false;
+    cout<<"A GANADO EL PUMA"<<endl;
+    
     }
-  return false;
+  
 }
 
-void Config(string arch);
+void pumamov() {
+    while (play) {
+        this_thread::sleep_for(chrono::milliseconds(randomtime()));
+
+        int filapuma = -1;
+        int columnapuma = -1;
+        {
+            lock_guard<mutex> bloqueo(mutexProtect);
+            for (int fila = 0; fila < 7; fila++) {
+                for (int columna = 0; columna < 5; columna++) {
+                    if (tablero[fila][columna] == "P") {
+                        filapuma = fila;
+                        columnapuma = columna;
+                  }
+             }
+            }
+        }
+
+        int filaPerro = -1;
+        int columnaPerro = -1;
+        int filaDestino = -1;
+        int columnaDestino = -1;
+        bool hayCaptura = false;
+        {
+            lock_guard<mutex> bloqueo(mutexProtect);
+            for (int f = 0; f < 7 && !hayCaptura; f++) { //para captura
+                for (int c = 0; c < 5 && !hayCaptura; c++) {
+                    if (tablero[f][c] == "E" &&
+                        Adyacente(filapuma, columnapuma, f, c)) {
+                        for (int x = 0; x < 7 && !hayCaptura; x++) {
+                            for (int y = 0; y < 5; y++) {
+                                if (tablero[x][y] == "." &&
+                                    Adyacente(f, c, x, y)) {
+                                    filaPerro = f;
+                                    columnaPerro = c;
+                                    filaDestino = x;
+                                    columnaDestino = y;
+                                    hayCaptura = true;
+                                    break;
+                              }
+                          }
+                      }
+                }
+               }
+            }
+        }
+        if (hayCaptura) {
+            capturarPerro(tablero, filapuma, columnapuma,filaPerro, columnaPerro,filaDestino, columnaDestino);
+            continue;
+        }
+        int filaDestinoNormal = -1;
+        int columnaDestinoNormal = -1;
+        bool encontrar = false;
+        {
+            lock_guard<mutex> bloqueo(mutexProtect);
+            for (int fila = 0; fila < 7 && !encontrar; fila++) {
+                for (int columna = 0; columna < 5; columna++) {
+                    if (tablero[fila][columna] == "." &&
+                        Adyacente(filapuma, columnapuma, fila, columna)) {
+                        filaDestinoNormal = fila;
+                        columnaDestinoNormal = columna;
+                        encontrar = true;
+                        break;
+                  }
+                }
+            }
+        }
+        if (encontrar) {
+        Movimiento(tablero, filapuma, columnapuma, filaDestinoNormal, columnaDestinoNormal);
+        }
+    }
+}
+
+void perromov(int num) {
+    while (play) {
+        this_thread::sleep_for(chrono::milliseconds(randomtime()));
+        int contador = 0;
+        int filaPerro = -1;
+        int columnaPerro = -1;
+        bool encontrado = false;
+        {
+          lock_guard<mutex> bloqueo(mutexProtect);
+            for (int fila = 0; fila < 7 && !encontrado; fila++) {
+                for (int columna = 0; columna < 5; columna++) {
+                    if (tablero[fila][columna] == "E") {
+                        contador++;
+                        if (contador == num) {
+                            filaPerro = fila;
+                            columnaPerro = columna;
+                            encontrado = true;
+                            break;
+                       }
+                    }
+                }
+            }
+        }
+        if (!encontrado) {
+            continue;
+        }
+        int filaDestino = -1;
+        int columnaDestino = -1;
+        bool hayMovimiento = false;
+        {
+            lock_guard<mutex> bloqueo(mutexProtect);
+            if (tablero[filaPerro][columnaPerro] != "E") {
+                continue;
+            }
+            for (int fila = 0; fila < 7 && !hayMovimiento; fila++) {
+                for (int columna = 0; columna < 5; columna++) {
+                    if (tablero[fila][columna] == "." &&
+                        Adyacente(filaPerro, columnaPerro, fila, columna)) {
+                        filaDestino = fila;
+                        columnaDestino = columna;
+                        hayMovimiento = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if (hayMovimiento) {
+        Movimiento(tablero, filaPerro, columnaPerro, filaDestino, columnaDestino);
+        }
+    }
+}
+
+
 
 int main(int argc, char* argv[]) {
     srand(time(NULL));
     if (argc < 3 || argc > 4) {
         return 1;}
-
+    if (argc == 4) {
+        cout << "archivo de configuracion: "<<argv[3] << endl;
+        Config(argv[3]);
+    }
     int N, M;
     N = stoi(argv[1]);
     M = stoi(argv[2]);
+    
+    Tablero();
+    
     //threads [0] puma, el resto perros
     thread hilos[13];
     hilos[0]=thread(pumamov);
+   
 
     for(int i=1; i<13; i++){
       hilos[i]=thread(perromov, i);
@@ -208,11 +356,8 @@ int main(int argc, char* argv[]) {
     cout <<"numero total de clientes: "<<N<< endl;
     cout << "Max. de mesas: "<< M << endl;
 
-    if (argc == 4) {
-        cout << "archivo de configuracion: "<<argv[3] << endl;
-        Config(argv[3]);
-    }
-  Tablero();
+   
+  
 
     return 0;
 }
