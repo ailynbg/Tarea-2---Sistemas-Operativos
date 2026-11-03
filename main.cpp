@@ -11,13 +11,14 @@
 #include <mutex>
 #include <atomic>
 #include <queue>
+#include <csignal>
 
 
 using namespace std;
 struct Mesa {
     string tablero[7][5];
     int perrosCap = 0;
-    bool play = true;
+    atomic<bool>play{true};
 
     pthread_mutex_t mutexProtect;
     pthread_cond_t condicion;
@@ -46,20 +47,31 @@ struct Jugador {
         pthread_cond_destroy(&condicion);
     }
 };
+atomic<bool>stop(false);
 queue<Jugador*> colaJugadores;
 sem_t mesasdispo;
 pthread_mutex_t mutexTorneo = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t jugadoresListos = PTHREAD_COND_INITIALIZER;
 int jugadoresEsperando = 0;
 
+void manejarSenal(int senal) {
+    if (senal == SIGINT) {
+        stop= 1;
+    }
+}
+
 int randomtime() {
     return 50+rand()%251;
 }
 bool emparejar(Jugador &jugador) {
     pthread_mutex_lock(&mutexTorneo);
+    if(stop){
+    pthread_mutex_unlock(&mutexTorneo);
+    return false;
+    }
     if (colaJugadores.empty()) {
         colaJugadores.push(&jugador);
-        while (!jugador.asignado) {
+        while (!jugador.asignado && !stop) {
             pthread_cond_wait(&jugador.condicion, &mutexTorneo);
         }
         pthread_mutex_unlock(&mutexTorneo);
@@ -75,6 +87,18 @@ bool emparejar(Jugador &jugador) {
         pthread_mutex_unlock(&mutexTorneo);
         return true;
     }
+}
+void CtrlC(sigset_t conjunto) {
+    int senal;
+    sigwait(&conjunto, &senal);
+    stop = true;
+    pthread_mutex_lock(&mutexTorneo);
+    while (!colaJugadores.empty()) {
+        Jugador* jugador = colaJugadores.front();
+        colaJugadores.pop();
+        pthread_cond_broadcast(&jugador->condicion);
+    }
+    pthread_mutex_unlock(&mutexTorneo);
 }
 void Config(string arch) { // saca las lineas de texto
     ifstream config(arch);
@@ -260,7 +284,7 @@ void capturarPerro(Mesa &mesa, int filaOrigen, int columnaOrigen,
 }
 
 void pumamov(Mesa &mesa) {
-    while (mesa.play) {
+    while (mesa.play && !stop) {
         this_thread::sleep_for(chrono::milliseconds(randomtime()));
         int filapuma = -1;
         int columnapuma = -1;
@@ -333,7 +357,7 @@ void pumamov(Mesa &mesa) {
 }
 
 void perromov(Mesa &mesa, int num) {
-    while (mesa.play) {
+    while (mesa.play && !stop) {
         this_thread::sleep_for(chrono::milliseconds(randomtime()));
         int contador = 0;
         int filaPerro = -1;
@@ -380,7 +404,7 @@ void perromov(Mesa &mesa, int num) {
     }
 }
 void jugarPartida() {
-    sem_wait(&mesasdispo);
+    if(sem_wait(&mesasdispo)!=0){return;};
     Mesa mesa;
     Tablero(mesa);
     thread hilos[13];
@@ -390,6 +414,9 @@ void jugarPartida() {
     }
     for (int i = 0; i < 13; i++) {
         hilos[i].join();
+    }
+    if(stop){
+    mesa.play=false;
     }
     sem_post(&mesasdispo);
 }
@@ -402,6 +429,12 @@ void cliente(Jugador* jugador) {
 
 int main(int argc, char* argv[]) {
     srand(time(NULL));
+    sigset_t conjunto;
+
+    sigemptyset(&conjunto);
+    sigaddset(&conjunto, SIGINT);
+    pthread_sigmask(SIG_BLOCK, &conjunto, NULL);
+
     if (argc < 3 || argc > 4) {
         return 1;
     }
@@ -411,6 +444,7 @@ int main(int argc, char* argv[]) {
         Config(argv[3]);
     }
     sem_init(&mesasdispo, 0, M);
+    thread hiloCtrlC(CtrlC, conjunto);
     Jugador** jugadores = new Jugador*[N];
     thread *hilos = new thread[N];
     for (int i = 0; i < N; i++) {
@@ -422,6 +456,11 @@ int main(int argc, char* argv[]) {
     for (int i = 0; i < N; i++) {
         hilos[i].join();
     }
+    if (!stop) {
+    pthread_kill(hiloCtrlC.native_handle(), SIGINT);
+    }
+
+    hiloCtrlC.join();
     for (int i = 0; i < N; i++) {
         delete jugadores[i];
     }
